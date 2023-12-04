@@ -1,0 +1,95 @@
+const AppError = require("../utils/AppError");
+const sqliteConnection = require("../database/sqlite");
+const { hash, compare } = require("bcryptjs");
+
+module.exports = class UsersController {
+  /**
+   * index - GET para listar vários registros.
+   * show - GET para exibir um registro específico
+   * create - POST para criar um registro
+   * update - PUT para atualizar um registro
+   * delete - DELETE para remover um registro
+   */
+  async create(req, res) {
+    const { name, email, password } = req.body;
+
+    const database = await sqliteConnection(); //Pega a conexão com o DB
+    const checkIfUserExists = await database.get(
+      `
+                SELECT * FROM users 
+                WHERE email = (?)`,
+      [email]
+    );
+
+    if (checkIfUserExists) throw new AppError("Email já está em uso");
+
+    //Se não existe insere o usuário no banco
+    const encryptedPassword = await hash(password, 8);
+
+    await database.run(
+      `
+            INSERT INTO users 
+            (name, email, password) 
+            VALUES (?, ?, ?)`,
+      [name, email, encryptedPassword]
+    );
+
+    return res.status(201).json();
+  }
+
+  async update(req, res) {
+    const { name, email, password, old_password } = req.body;
+    const user_id = req.user.id;
+
+    const database = await sqliteConnection(); //Pega a conexão com o DB
+
+    const user = await database.get(
+      `SELECT * FROM users 
+       WHERE user_id = (?)`,
+      [user_id]
+    );
+
+    if (!user) {
+      throw new AppError("Usuário não encontrado");
+    }
+
+    const userWithUpdatedEmail = await database.get(
+      `
+                SELECT * FROM users 
+                WHERE email = (?)`,
+      [email]
+    );
+
+    if (userWithUpdatedEmail && userWithUpdatedEmail.user_id !== user.user_id)
+      throw new AppError("Email já em uso");
+
+    user.name = name ?? user.name;
+    user.email = email ?? user.email;
+
+    if (password && !old_password) {
+      throw new AppError("Você precisa informar a senha antiga");
+    }
+
+    if (password && old_password) {
+      const checkOldPassword = await compare(old_password, user.password);
+      if (!checkOldPassword) {
+        throw new AppError("A senha antiga não confere");
+      }
+
+      user.password = await hash(password, 8);
+    }
+
+    await database.run(
+      `
+            UPDATE users SET
+            name = ?,
+            email = ?,
+            password = ?,
+            updated_at = DATETIME('now', 'localtime')
+            WHERE user_id = ?`,
+      [user.name, user.email, user.password, user_id]
+    );
+
+    return res.status(200).json();
+  }
+};
